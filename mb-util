@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # MBUtil: a tool for MBTiles files
 # Supports importing, exporting, and more
@@ -10,11 +10,11 @@
 import logging, os, sys
 from optparse import OptionParser
 
-from mbutil import mbtiles_to_disk, disk_to_mbtiles, mbtiles_metadata_to_disk
+from mbutil import mbtiles_to_disk, mbtiles_to_url, disk_to_mbtiles, mbtiles_metadata_to_disk
 
 if __name__ == '__main__':
 
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
 
     parser = OptionParser(usage="""usage: %prog [options] input output
     
@@ -57,12 +57,24 @@ if __name__ == '__main__':
         help='''Dictate whether the operations should run silently''',
         action="store_true",
         default=False)
+    
+    parser.add_option('--access_key', dest='access_key',
+        help='''The access key to URL''',
+        default='')
 
     (options, args) = parser.parse_args()
 
     # Transfer operations
     if len(args) != 2:
         parser.print_help()
+        sys.exit(1)
+
+    # to url
+    if args[1].startswith('http'):
+        if os.path.isfile(args[0]):
+            mbtiles_to_url(args[0], args[1], **options.__dict__)
+            sys.exit(0)
+        sys.stderr.write('Importing tiles to an URL is not yet supported\n')
         sys.exit(1)
 
     if os.path.isfile(args[0]) and os.path.exists(args[1]):
