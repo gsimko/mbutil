@@ -404,7 +404,9 @@ def upload_file(data, url, access_key):
         }
         resp1 = http.request("PUT", url, headers=headers, body=data)    
         if resp1.status != 201:
-            logger.error(f"Error uploading file {url}: {resp1.status}")
+            logger.error(f"Failure: {url}")
+        else:
+            logger.info(f"Success: {url}")
     except Exception as e:
         logger.error(f"Exception uploading file {url}: {e}")
 
