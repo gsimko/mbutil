@@ -391,9 +391,14 @@ http = urllib3.PoolManager(num_pools=1, maxsize=MAX_WORKERS, block=True)
 executing = 0
 done = 0
 sem = threading.Semaphore(MAX_WORKERS)
+# grep '\(Success\|Skip\)' nohup.out | sed 's/INFO:mbutil.util:\(Success\|Skip\): //' success.out > success_urls.txt
+processed = set(line.strip() for line in open('success_urls.txt'))
 
 def upload_file(data, url, access_key):
     try:
+        if url in processed:
+            logger.info(f"Skip: {url}")
+            return
         sha256hex = sha256(data).hexdigest()
         headers = {
             # bunny cdn specific
