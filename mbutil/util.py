@@ -414,9 +414,9 @@ def upload_file(data, url, key, authorizationToken):
             # "Content-Type": "application/octet-stream",
             # "accept": "application/json"
         }
-        resp1 = http.request("PUT", url, headers=headers, body=data)    
+        resp1 = http.request("POST", url, headers=headers, body=data)    
         if resp1.status != 200:
-            logger.error(f"Failure: {key}")
+            logger.error(f"Failure: {key}: {resp1.data}")
         else:
             logger.info(f"Success: {key}")
     except Exception as e:
@@ -462,23 +462,23 @@ def mbtiles_to_url(mbtiles_file, url, **kwargs):
         logger.debug("%s --> %s" % (mbtiles_file, url))
     
     upload_urls = []
-    for i in range(1, MAX_WORKERS):
+    for i in range(0, MAX_WORKERS):
         resp = http.request("GET", url, headers={ "Authorization": access_key })
         if resp.status == 200:
-            upload_urls.append(resp.json())
+            upload_urls.append(json.loads(resp.data))
         else:
-            raise Exception('could not access url: ' + resp.json())
+            raise Exception('could not access url: ' + resp.data)
 
     con = mbtiles_connect(mbtiles_file, silent)
     metadata = dict(con.execute('select name, value from metadata;').fetchall())
-    upload_file(json.dumps(metadata, indent=4), upload_urls[0].uploadUrl, os.path.join(prefix, 'metadata.json'), upload_urls[0].authorizationToken)
-    count = con.execute('select count(zoom_level) from tiles where zoom_level <= {maxzoom};').fetchone()[0]
+    upload_file(json.dumps(metadata, indent=4).encode(), upload_urls[0]['uploadUrl'], os.path.join(prefix, 'metadata.json'), upload_urls[0]['authorizationToken'])
+    count = con.execute(f'select count(zoom_level) from tiles where zoom_level <= {maxzoom};').fetchone()[0]
 
     # if interactivity
     formatter = metadata.get('formatter')
     if formatter:
         formatter_json = {"formatter":formatter}
-        upload_file(json.dumps(formatter_json), upload_urls[0].uploadUrl, os.path.join(prefix, 'layer.json'), upload_urls[0].authorizationToken)
+        upload_file(json.dumps(formatter_json), upload_urls[0]['uploadUrl'], os.path.join(prefix, 'layer.json'), upload_urls[0]['authorizationToken'])
     
 
     tiles = con.execute(f'select zoom_level, tile_column, tile_row, tile_data from tiles where zoom_level <= {maxzoom};')
@@ -503,7 +503,7 @@ def mbtiles_to_url(mbtiles_file, url, **kwargs):
         while t:
             sem.acquire()
             url = upload_urls.pop()
-            future = executor.submit(upload_tile, t, url.uploadUrl, url.authorizationToken, **kwargs)
+            future = executor.submit(upload_tile, t, url['uploadUrl'], url['authorizationToken'], **kwargs)
             future_mapping[future] = url
             executing += 1
             if not silent:
