@@ -61,6 +61,14 @@ if __name__ == '__main__':
     parser.add_option('--access_key', dest='access_key',
         help='''The access key to URL''',
         default='')
+    
+    parser.add_option('--prefix', dest='prefix',
+        help='''The key prefix''',
+        default='')
+    
+    parser.add_option('--maxzoom', dest='maxzoom',
+        help='''The maximum zoom level to include''',
+        default='15')
 
     (options, args) = parser.parse_args()
 

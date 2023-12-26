@@ -10,7 +10,7 @@
 # https://github.com/mapbox/node-mbtiles/blob/master/lib/schema.sql
 
 import sqlite3, sys, logging, time, os, json, zlib, re, urllib3, concurrent.futures, threading
-from hashlib import sha256
+from hashlib import sha1
 
 logger = logging.getLogger(__name__)
 
@@ -391,33 +391,40 @@ http = urllib3.PoolManager(num_pools=1, maxsize=MAX_WORKERS, block=True)
 executing = 0
 done = 0
 sem = threading.Semaphore(MAX_WORKERS)
-# grep '\(Success\|Skip\)' nohup.out | sed 's/INFO:mbutil.util:\(Success\|Skip\): //' success.out > success_urls.txt
+# grep '\(Success\|Skip\)' nohup.out | sed 's/INFO:mbutil.util:\(Success\|Skip\): //' > success_urls.txt
 processed = set(line.strip() for line in open('success_urls.txt'))
 
-def upload_file(data, url, access_key):
+def upload_file(data, url, key, authorizationToken):
     try:
-        if url in processed:
-            logger.info(f"Skip: {url}")
+        if key in processed:
+            logger.info(f"Skip: {key}")
             return
-        sha256hex = sha256(data).hexdigest()
+        sha1hex = sha1(data).hexdigest()
         headers = {
+            # b2 secific
+            "Authorization": authorizationToken,
+            "X-Bz-File-Name": key,
+            "Content-Type": "application/x-protobuf",
+            "Content-Length": len(data),
+            "X-Bz-Info-b2-content-encoding": "gzip",
+            "X-Bz-Content-Sha1": sha1hex,
             # bunny cdn specific
-            "AccessKey": access_key,
-            "Checksum": sha256hex,
-            "Content-Type": "application/octet-stream",
-            "accept": "application/json"
+            # "AccessKey": access_key,
+            # "Checksum": sha256hex,
+            # "Content-Type": "application/octet-stream",
+            # "accept": "application/json"
         }
         resp1 = http.request("PUT", url, headers=headers, body=data)    
-        if resp1.status != 201:
-            logger.error(f"Failure: {url}")
+        if resp1.status != 200:
+            logger.error(f"Failure: {key}")
         else:
-            logger.info(f"Success: {url}")
+            logger.info(f"Success: {key}")
     except Exception as e:
-        logger.error(f"Exception uploading file {url}: {e}")
+        logger.error(f"Exception uploading file {key}: {e}")
 
-def upload_tile(t, url, **kwargs):
+def upload_tile(t, url, authorizationToken, **kwargs):
     silent = kwargs.get('silent')
-    access_key = kwargs.get('access_key')
+    prefix = kwargs.get('prefix')
     z = t[0]
     x = t[1]
     y = t[2]
@@ -425,9 +432,9 @@ def upload_tile(t, url, **kwargs):
         y = flip_y(z,y)
         if not silent:
             logger.debug('flipping')
-        tile_dir = os.path.join(url, str(z), str(x))
+        tile_dir = os.path.join(prefix, str(z), str(x))
     elif kwargs.get('scheme') == 'wms':
-        tile_dir = os.path.join(url,
+        tile_dir = os.path.join(prefix,
             "%02d" % (z),
             "%03d" % (int(x) / 1000000),
             "%03d" % ((int(x) / 1000) % 1000),
@@ -435,45 +442,58 @@ def upload_tile(t, url, **kwargs):
             "%03d" % (int(y) / 1000000),
             "%03d" % ((int(y) / 1000) % 1000))
     else:
-        tile_dir = os.path.join(url, str(z), str(x))
-    if not os.path.isdir(tile_dir):
-        os.makedirs(tile_dir)
+        tile_dir = os.path.join(prefix, str(z), str(x))
     if kwargs.get('scheme') == 'wms':
         tile = os.path.join(tile_dir,'%03d.%s' % (int(y) % 1000, kwargs.get('format', 'png')))
     else:
         tile = os.path.join(tile_dir,'%s.%s' % (y, kwargs.get('format', 'png')))
-    upload_file(t[3], tile, access_key)
+    upload_file(t[3], url, tile, authorizationToken)
 
 def mbtiles_to_url(mbtiles_file, url, **kwargs):
     global done
     global executing
 
+    maxzoom = kwargs.get('maxzoom')
+    prefix = kwargs.get('prefix')
     silent = kwargs.get('silent')
     access_key = kwargs.get('access_key')
     if not silent:
         logger.debug("Exporting MBTiles to url")
         logger.debug("%s --> %s" % (mbtiles_file, url))
+    
+    upload_urls = []
+    for i in range(1, MAX_WORKERS):
+        resp = http.request("GET", url, headers={ "Authorization": access_key })
+        if resp.status == 200:
+            upload_urls.append(resp.json())
+        else:
+            raise Exception('could not access url: ' + resp.json())
+
     con = mbtiles_connect(mbtiles_file, silent)
     metadata = dict(con.execute('select name, value from metadata;').fetchall())
-    upload_file(json.dumps(metadata, indent=4), os.path.join(url, 'metadata.json'), access_key)
-    count = con.execute('select count(zoom_level) from tiles;').fetchone()[0]
+    upload_file(json.dumps(metadata, indent=4), upload_urls[0].uploadUrl, os.path.join(prefix, 'metadata.json'), upload_urls[0].authorizationToken)
+    count = con.execute('select count(zoom_level) from tiles where zoom_level <= {maxzoom};').fetchone()[0]
 
     # if interactivity
     formatter = metadata.get('formatter')
     if formatter:
         formatter_json = {"formatter":formatter}
-        upload_file(json.dumps(formatter_json), os.path.join(url, 'layer.json'), access_key)
+        upload_file(json.dumps(formatter_json), upload_urls[0].uploadUrl, os.path.join(prefix, 'layer.json'), upload_urls[0].authorizationToken)
+    
 
-    tiles = con.execute('select zoom_level, tile_column, tile_row, tile_data from tiles;')
-        
+    tiles = con.execute(f'select zoom_level, tile_column, tile_row, tile_data from tiles where zoom_level <= {maxzoom};')
+    
     done = 0
     executing = 0
+    future_mapping = {}
     def doneCb(r):
         global done
         global executing
         global sem
         executing -= 1
         done = done + 1
+        upload_urls.append(future_mapping[future])
+        del future_mapping[future]
         sem.release()
         if not silent:
             logger.info('%s / %s tiles exported (executing %s)' % (done, count, executing))
@@ -482,7 +502,9 @@ def mbtiles_to_url(mbtiles_file, url, **kwargs):
         t = tiles.fetchone()
         while t:
             sem.acquire()
-            future = executor.submit(upload_tile, t, url, **kwargs)
+            url = upload_urls.pop()
+            future = executor.submit(upload_tile, t, url.uploadUrl, url.authorizationToken, **kwargs)
+            future_mapping[future] = url
             executing += 1
             if not silent:
                 logger.debug('%s tiles executing' % (executing))
@@ -490,7 +512,6 @@ def mbtiles_to_url(mbtiles_file, url, **kwargs):
             t = tiles.fetchone()
 
     # grids
-    callback = kwargs.get('callback')
     done = 0
     try:
         count = con.execute('select count(zoom_level) from grids;').fetchone()[0]
@@ -499,33 +520,4 @@ def mbtiles_to_url(mbtiles_file, url, **kwargs):
     except sqlite3.OperationalError:
         g = None # no grids table
     while g:
-        zoom_level = g[0] # z
-        tile_column = g[1] # x
-        y = g[2] # y
-        grid_data_cursor = con.execute('''select key_name, key_json FROM
-            grid_data WHERE
-            zoom_level = %(zoom_level)d and
-            tile_column = %(tile_column)d and
-            tile_row = %(y)d;''' % locals() )
-        if kwargs.get('scheme') == 'xyz':
-            y = flip_y(zoom_level,y)
-        grid_dir = os.path.join(url, str(zoom_level), str(tile_column))
-        if not os.path.isdir(grid_dir):
-            os.makedirs(grid_dir)
-        grid = os.path.join(grid_dir,'%s.grid.json' % (y))
-        grid_json = json.loads(zlib.decompress(g[3]).decode('utf-8'))
-        # join up with the grid 'data' which is in pieces when stored in mbtiles file
-        grid_data = grid_data_cursor.fetchone()
-        data = {}
-        while grid_data:
-            data[grid_data[0]] = json.loads(grid_data[1])
-            grid_data = grid_data_cursor.fetchone()
-        grid_json['data'] = data
-        if callback in (None, "", "false", "null"):
-            upload_file(json.dumps(grid_json), grid, access_key)
-        else:
-            upload_file('%s(%s);' % (callback, json.dumps(grid_json)), grid, access_key)
-        done = done + 1
-        if not silent:
-            logger.info('%s / %s grids exported' % (done, count))
-        g = grids.fetchone()
+        raise Exception('grids are not supported')
