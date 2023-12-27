@@ -69,6 +69,10 @@ if __name__ == '__main__':
     parser.add_option('--maxzoom', dest='maxzoom',
         help='''The maximum zoom level to include''',
         default='15')
+    
+    parser.add_option('--bucketId', dest='bucketId',
+        help='''b2 bucket id''',
+        default='')
 
     (options, args) = parser.parse_args()
 

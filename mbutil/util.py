@@ -391,38 +391,70 @@ http = urllib3.PoolManager(num_pools=1, maxsize=MAX_WORKERS, block=True)
 executing = 0
 done = 0
 sem = threading.Semaphore(MAX_WORKERS)
-# grep '\(Success\|Skip\)' nohup.out | sed 's/INFO:mbutil.util:\(Success\|Skip\): //' > success_urls.txt
-processed = set(line.strip() for line in open('success_urls.txt'))
+upload_urls = []
 
-def upload_file(data, url, key, authorizationToken):
-    try:
-        if key in processed:
-            logger.info(f"Skip: {key}")
-            return
-        sha1hex = sha1(data).hexdigest()
-        headers = {
-            # b2 secific
-            "Authorization": authorizationToken,
-            "X-Bz-File-Name": key,
-            "Content-Type": "application/x-protobuf",
-            "Content-Length": len(data),
-            "X-Bz-Info-b2-content-encoding": "gzip",
-            "X-Bz-Content-Sha1": sha1hex,
-            # bunny cdn specific
-            # "AccessKey": access_key,
-            # "Checksum": sha256hex,
-            # "Content-Type": "application/octet-stream",
-            # "accept": "application/json"
-        }
-        resp1 = http.request("POST", url, headers=headers, body=data)    
-        if resp1.status != 200:
-            logger.error(f"Failure: {key}: {resp1.data}")
+def get_upload_url(**kwargs):
+    s = 1
+    while True:
+        resp = http.request("GET", f'https://api004.backblazeb2.com/b2api/v2/b2_get_upload_url?bucketId={kwargs["bucketId"]}', headers={ "Authorization": kwargs["access_key"] })
+        if resp.status == 200:
+            j = json.loads(resp.data)
+            logger.info(f'added worker {j["uploadUrl"]} {j["authorizationToken"]}')
+            return j
+        elif resp.status == 429:
+            time.sleep(resp.headers.get('Retry-After', s))
+            s = 1
+        elif resp.status == 503:
+            time.sleep(s)
+            s *= 2
         else:
-            logger.info(f"Success: {key}")
-    except Exception as e:
-        logger.error(f"Exception uploading file {key}: {e}")
+            raise Exception('could not access url: ' + resp.data)
 
-def upload_tile(t, url, authorizationToken, **kwargs):
+# grep '\(Success\|Skip\)' nohup.out | sed 's/INFO:mbutil.util:\(Success\|Skip\): //' > success_urls.txt
+try:
+    processed = set(line.strip() for line in open('success_urls.txt'))
+except:
+    processed = set()
+
+def upload_file(data, key, **kwargs):
+    if key in processed:
+        logger.info(f"Skip: {key}")
+        return
+    for attempt in range(0,5):
+        try:
+            sha1hex = sha1(data).hexdigest()
+
+            if len(upload_urls) > 0:
+                url = upload_urls.pop()
+            else:
+                url = get_upload_url(**kwargs)
+            headers = {
+                # b2 secific
+                "Authorization": url['authorizationToken'],
+                "X-Bz-File-Name": key,
+                "Content-Type": "application/x-protobuf",
+                "Content-Length": len(data),
+                "X-Bz-Info-b2-content-encoding": "gzip",
+                "X-Bz-Content-Sha1": sha1hex,
+                # bunny cdn specific
+                # "AccessKey": access_key,
+                # "Checksum": sha256hex,
+                # "Content-Type": "application/octet-stream",
+                # "accept": "application/json"
+            }
+            resp1 = http.request("POST", url['uploadUrl'], headers=headers, body=data)    
+            if resp1.status != 401:
+                upload_urls.append(url)
+            if resp1.status == 200:
+                logger.info(f"Success: {key}")
+                return
+            if resp1.status == 408 or resp1.status == 429:
+                time.sleep(2)
+            logger.error(f"Attempt {attempt+1} failure: {key}: {resp1.data}")
+        except Exception as e:
+            logger.error(f"Attempt {attempt+1} exception uploading file {key}: {e}")
+
+def upload_tile(t, **kwargs):
     silent = kwargs.get('silent')
     prefix = kwargs.get('prefix')
     z = t[0]
@@ -447,7 +479,7 @@ def upload_tile(t, url, authorizationToken, **kwargs):
         tile = os.path.join(tile_dir,'%03d.%s' % (int(y) % 1000, kwargs.get('format', 'png')))
     else:
         tile = os.path.join(tile_dir,'%s.%s' % (y, kwargs.get('format', 'png')))
-    upload_file(t[3], url, tile, authorizationToken)
+    upload_file(t[3], tile, **kwargs)
 
 def mbtiles_to_url(mbtiles_file, url, **kwargs):
     global done
@@ -456,44 +488,30 @@ def mbtiles_to_url(mbtiles_file, url, **kwargs):
     maxzoom = kwargs.get('maxzoom')
     prefix = kwargs.get('prefix')
     silent = kwargs.get('silent')
-    access_key = kwargs.get('access_key')
     if not silent:
         logger.debug("Exporting MBTiles to url")
         logger.debug("%s --> %s" % (mbtiles_file, url))
     
-    upload_urls = []
-    for i in range(0, MAX_WORKERS):
-        resp = http.request("GET", url, headers={ "Authorization": access_key })
-        if resp.status == 200:
-            upload_urls.append(json.loads(resp.data))
-        else:
-            raise Exception('could not access url: ' + resp.data)
-
     con = mbtiles_connect(mbtiles_file, silent)
     metadata = dict(con.execute('select name, value from metadata;').fetchall())
-    upload_file(json.dumps(metadata, indent=4).encode(), upload_urls[0]['uploadUrl'], os.path.join(prefix, 'metadata.json'), upload_urls[0]['authorizationToken'])
+    upload_file(json.dumps(metadata, indent=4).encode(), os.path.join(prefix, 'metadata.json'))
     count = con.execute(f'select count(zoom_level) from tiles where zoom_level <= {maxzoom};').fetchone()[0]
 
     # if interactivity
     formatter = metadata.get('formatter')
     if formatter:
         formatter_json = {"formatter":formatter}
-        upload_file(json.dumps(formatter_json), upload_urls[0]['uploadUrl'], os.path.join(prefix, 'layer.json'), upload_urls[0]['authorizationToken'])
-    
-
+        upload_file(json.dumps(formatter_json), os.path.join(prefix, 'layer.json'))    
     tiles = con.execute(f'select zoom_level, tile_column, tile_row, tile_data from tiles where zoom_level <= {maxzoom};')
     
     done = 0
     executing = 0
-    future_mapping = {}
     def doneCb(r):
         global done
         global executing
         global sem
         executing -= 1
         done = done + 1
-        upload_urls.append(future_mapping[future])
-        del future_mapping[future]
         sem.release()
         if not silent:
             logger.info('%s / %s tiles exported (executing %s)' % (done, count, executing))
@@ -502,9 +520,7 @@ def mbtiles_to_url(mbtiles_file, url, **kwargs):
         t = tiles.fetchone()
         while t:
             sem.acquire()
-            url = upload_urls.pop()
-            future = executor.submit(upload_tile, t, url['uploadUrl'], url['authorizationToken'], **kwargs)
-            future_mapping[future] = url
+            future = executor.submit(upload_tile, t, **kwargs)
             executing += 1
             if not silent:
                 logger.debug('%s tiles executing' % (executing))
