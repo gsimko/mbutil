@@ -386,17 +386,17 @@ def mbtiles_to_disk(mbtiles_file, directory_path, **kwargs):
             logger.info('%s / %s grids exported' % (done, count))
         g = grids.fetchone()
 
-MAX_WORKERS = 75
-http = urllib3.PoolManager(num_pools=1, maxsize=MAX_WORKERS, block=True)
+MAX_WORKERS = 275
+http = urllib3.PoolManager(num_pools=MAX_WORKERS, maxsize=MAX_WORKERS, block=True)
 executing = 0
 done = 0
 sem = threading.Semaphore(MAX_WORKERS)
 upload_urls = []
 
-def get_upload_url(**kwargs):
+def get_upload_url(url, **kwargs):
     s = 1
     while True:
-        resp = http.request("GET", f'https://api004.backblazeb2.com/b2api/v2/b2_get_upload_url?bucketId={kwargs["bucketId"]}', headers={ "Authorization": kwargs["access_key"] })
+        resp = http.request("GET", url, headers={ "Authorization": kwargs["access_key"] })
         if resp.status == 200:
             j = json.loads(resp.data)
             logger.info(f'added worker {j["uploadUrl"]} {j["authorizationToken"]}')
@@ -416,7 +416,7 @@ try:
 except:
     processed = set()
 
-def upload_file(data, key, **kwargs):
+def upload_file(data, url, key, **kwargs):
     if key in processed:
         logger.info(f"Skip: {key}")
         return
@@ -427,7 +427,7 @@ def upload_file(data, key, **kwargs):
             if len(upload_urls) > 0:
                 url = upload_urls.pop()
             else:
-                url = get_upload_url(**kwargs)
+                url = get_upload_url(url, **kwargs)
             headers = {
                 # b2 secific
                 "Authorization": url['authorizationToken'],
@@ -454,7 +454,7 @@ def upload_file(data, key, **kwargs):
         except Exception as e:
             logger.error(f"Attempt {attempt+1} exception uploading file {key}: {e}")
 
-def upload_tile(t, **kwargs):
+def upload_tile(t, url, **kwargs):
     silent = kwargs.get('silent')
     prefix = kwargs.get('prefix')
     z = t[0]
@@ -479,7 +479,7 @@ def upload_tile(t, **kwargs):
         tile = os.path.join(tile_dir,'%03d.%s' % (int(y) % 1000, kwargs.get('format', 'png')))
     else:
         tile = os.path.join(tile_dir,'%s.%s' % (y, kwargs.get('format', 'png')))
-    upload_file(t[3], tile, **kwargs)
+    upload_file(t[3], url, tile, **kwargs)
 
 def mbtiles_to_url(mbtiles_file, url, **kwargs):
     global done
@@ -494,14 +494,14 @@ def mbtiles_to_url(mbtiles_file, url, **kwargs):
     
     con = mbtiles_connect(mbtiles_file, silent)
     metadata = dict(con.execute('select name, value from metadata;').fetchall())
-    upload_file(json.dumps(metadata, indent=4).encode(), os.path.join(prefix, 'metadata.json'))
+    upload_file(json.dumps(metadata, indent=4).encode(), url, os.path.join(prefix, 'metadata.json'), **kwargs)
     count = con.execute(f'select count(zoom_level) from tiles where zoom_level <= {maxzoom};').fetchone()[0]
 
     # if interactivity
     formatter = metadata.get('formatter')
     if formatter:
         formatter_json = {"formatter":formatter}
-        upload_file(json.dumps(formatter_json), os.path.join(prefix, 'layer.json'))    
+        upload_file(json.dumps(formatter_json), url, os.path.join(prefix, 'layer.json'), **kwargs)    
     tiles = con.execute(f'select zoom_level, tile_column, tile_row, tile_data from tiles where zoom_level <= {maxzoom};')
     
     done = 0
@@ -520,7 +520,7 @@ def mbtiles_to_url(mbtiles_file, url, **kwargs):
         t = tiles.fetchone()
         while t:
             sem.acquire()
-            future = executor.submit(upload_tile, t, **kwargs)
+            future = executor.submit(upload_tile, t, url, **kwargs)
             executing += 1
             if not silent:
                 logger.debug('%s tiles executing' % (executing))
