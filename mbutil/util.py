@@ -436,6 +436,7 @@ def upload_file(data, url, key, **kwargs):
                 "Content-Length": len(data),
                 "X-Bz-Info-b2-content-encoding": "gzip",
                 "X-Bz-Content-Sha1": sha1hex,
+                "X-Bz-Info-b2-cache-control": "public,immutable,max-age=31536000", # 365 days
                 # bunny cdn specific
                 # "AccessKey": access_key,
                 # "Checksum": sha256hex,
