@@ -408,7 +408,7 @@ def get_upload_url(url, **kwargs):
             time.sleep(s)
             s *= 2
         else:
-            raise Exception('could not access url: ' + resp.data)
+            raise Exception('could not access url: ' + resp.data.decode())
 
 # grep '\(Success\|Skip\)' nohup.out | sed 's/INFO:mbutil.util:\(Success\|Skip\): //' > success_urls.txt
 try:
@@ -436,7 +436,7 @@ def upload_file(data, url, key, **kwargs):
                 "Content-Length": len(data),
                 "X-Bz-Info-b2-content-encoding": "gzip",
                 "X-Bz-Content-Sha1": sha1hex,
-                "X-Bz-Info-b2-cache-control": "public,immutable,max-age=31536000", # 365 days
+                "X-Bz-Info-b2-cache-control": "public%2Cimmutable%2Cmax-age=31536000", # 365 days
                 # bunny cdn specific
                 # "AccessKey": access_key,
                 # "Checksum": sha256hex,
