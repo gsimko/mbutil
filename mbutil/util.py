@@ -425,12 +425,12 @@ def upload_file(data, url, key, **kwargs):
             sha1hex = sha1(data).hexdigest()
 
             if len(upload_urls) > 0:
-                url = upload_urls.pop()
+                uploadurl = upload_urls.pop()
             else:
-                url = get_upload_url(url, **kwargs)
+                uploadurl = get_upload_url(url, **kwargs)
             headers = {
                 # b2 secific
-                "Authorization": url['authorizationToken'],
+                "Authorization": uploadurl['authorizationToken'],
                 "X-Bz-File-Name": key,
                 "Content-Type": "application/x-protobuf",
                 "Content-Length": len(data),
@@ -443,9 +443,9 @@ def upload_file(data, url, key, **kwargs):
                 # "Content-Type": "application/octet-stream",
                 # "accept": "application/json"
             }
-            resp1 = http.request("POST", url['uploadUrl'], headers=headers, body=data)    
+            resp1 = http.request("POST", uploadurl['uploadUrl'], headers=headers, body=data)    
             if resp1.status != 401:
-                upload_urls.append(url)
+                upload_urls.append(uploadurl)
             if resp1.status == 200:
                 logger.info(f"Success: {key}")
                 return
