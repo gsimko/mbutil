@@ -451,9 +451,10 @@ def upload_file(data, url, key, **kwargs):
                 return
             if resp1.status == 408 or resp1.status == 429:
                 time.sleep(2)
-            logger.error(f"Attempt {attempt+1} failure: {key}: {resp1.data}")
+            logger.error(f"Attempt {attempt+1} failure: {key}: {resp1.data.decode()}")
         except Exception as e:
             logger.error(f"Attempt {attempt+1} exception uploading file {key}: {e}")
+    logger.error(f"Failure: {key}")
 
 def upload_tile(t, url, **kwargs):
     silent = kwargs.get('silent')
