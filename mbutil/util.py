@@ -428,7 +428,7 @@ def upload_file(data, url, key, **kwargs):
         if not key in failures:
             logger.info(f"Skip: {key}")
             return
-    else if key in processed:
+    elif key in processed:
         logger.info(f"Skip: {key}")
         return
     for attempt in range(0,5):
