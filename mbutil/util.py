@@ -411,13 +411,24 @@ def get_upload_url(url, **kwargs):
             raise Exception('could not access url: ' + resp.data.decode())
 
 # grep '\(Success\|Skip\)' nohup.out | sed 's/INFO:mbutil.util:\(Success\|Skip\): //' > success_urls.txt
+# grep Fail nohup.out | sed 's/INFO:mbutil.util:Failure: //' > failure_urls.txt
 try:
     processed = set(line.strip() for line in open('success_urls.txt'))
 except:
     processed = set()
+try:
+    failures = set(line.strip() for line in open('failure_urls.txt'))
+    use_failures = True
+except:
+    failures = set()
+    use_failures = False
 
 def upload_file(data, url, key, **kwargs):
-    if key in processed:
+    if use_failures:
+        if not key in failures:
+            logger.info(f"Skip: {key}")
+            return
+    else if key in processed:
         logger.info(f"Skip: {key}")
         return
     for attempt in range(0,5):
