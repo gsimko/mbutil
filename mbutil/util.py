@@ -11,6 +11,7 @@
 
 import sqlite3, sys, logging, time, os, json, zlib, re, urllib3, concurrent.futures, threading
 from hashlib import sha1
+from pmtiles.reader import all_tiles, MmapSource, Reader
 
 logger = logging.getLogger(__name__)
 
@@ -550,3 +551,45 @@ def mbtiles_to_url(mbtiles_file, url, **kwargs):
         g = None # no grids table
     while g:
         raise Exception('grids are not supported')
+
+def pmtiles_to_url(pmtiles_file, url, **kwargs):
+    global done
+    global executing
+
+    maxzoom = kwargs.get('maxzoom')
+    prefix = kwargs.get('prefix')
+    silent = kwargs.get('silent')
+    if not silent:
+        logger.debug("Exporting PMTiles to url")
+        logger.debug("%s --> %s" % (pmtiles_file, url))
+    
+    with open(pmtiles_file) as f:
+        source = MmapSource(f)
+        reader = Reader(source)
+        metadata = reader.metadata()
+        upload_file(json.dumps(metadata, indent=4).encode(), url, os.path.join(prefix, 'metadata.json'), **kwargs)
+        count = reader.header()['addressed_tiles_count']
+
+        done = 0
+        executing = 0
+        def doneCb(r):
+            global done
+            global executing
+            global sem
+            executing -= 1
+            done = done + 1
+            sem.release()
+            if not silent:
+                logger.info('%s / %s tiles exported (executing %s)' % (done, count, executing))
+
+        tiles = all_tiles(source)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            t = next(tiles, None)
+            while t:
+                sem.acquire()
+                future = executor.submit(upload_tile, t, url, **kwargs)
+                executing += 1
+                if not silent:
+                    logger.debug('%s tiles executing' % (executing))
+                future.add_done_callback(doneCb)
+                t = next(tiles, None)

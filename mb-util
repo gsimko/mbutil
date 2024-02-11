@@ -10,7 +10,7 @@
 import logging, os, sys
 from optparse import OptionParser
 
-from mbutil import mbtiles_to_disk, mbtiles_to_url, disk_to_mbtiles, mbtiles_metadata_to_disk
+from mbutil import mbtiles_to_disk, mbtiles_to_url, pmtiles_to_url, disk_to_mbtiles, mbtiles_metadata_to_disk
 
 if __name__ == '__main__':
 
@@ -80,8 +80,12 @@ if __name__ == '__main__':
     # to url
     if args[1].startswith('http'):
         if os.path.isfile(args[0]):
-            mbtiles_to_url(args[0], args[1], **options.__dict__)
-            sys.exit(0)
+            if args[0].endswith('.mbtiles'):
+                mbtiles_to_url(args[0], args[1], **options.__dict__)
+                sys.exit(0)
+            if args[0].endswith('.pmtiles'):
+                pmtiles_to_url(args[0], args[1], **options.__dict__)
+                sys.exit(0)
         sys.stderr.write('Importing tiles to an URL is not yet supported\n')
         sys.exit(1)
 
