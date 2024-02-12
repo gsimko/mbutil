@@ -587,7 +587,7 @@ def pmtiles_to_url(pmtiles_file, url, **kwargs):
             t = next(tiles, None)
             while t:
                 sem.acquire()
-                future = executor.submit(upload_tile, t, url, **kwargs)
+                future = executor.submit(upload_tile, [t[0][0], t[0][1], t[0][2], t[1]], url, **kwargs)
                 executing += 1
                 if not silent:
                     logger.debug('%s tiles executing' % (executing))
